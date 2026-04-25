@@ -1,0 +1,27 @@
+# Secrets
+secrets.yaml
+
+# ESPHome build artifacts
+.esphome/
+build/
+*.bin
+*.elf
+*.map
+
+# Backup files
+*.backup
+*.bak
+
+# Editor files
+*.swp
+*~
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# AI Files
+CLAUDE.md
+.claude/

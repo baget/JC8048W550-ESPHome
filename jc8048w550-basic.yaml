@@ -1,0 +1,239 @@
+# ============================================================
+# ESPHome – JC8048W550 (ESP32-S3-WROOM N16R8, ST7262 800×480)
+# Backlight: GPIO2 active HIGH  ← root cause of blank screen
+# Source: JC8048W550C.h (ESP32_Display_Panel board file)
+# ============================================================
+
+esphome:
+  name: "jc8048w550"
+  friendly_name: "JC8048W550 Display"
+  on_boot:
+    priority: -100    # After display + LVGL init
+    then:
+      - lambda: |-
+          ESP_LOGI("boot", ">>> on_boot: turning on backlight + showing page");
+      # Turn backlight ON first
+      - output.turn_on: backlight
+      - lvgl.page.show: main_page
+
+esp32:
+  board: esp32-s3-devkitc-1
+  variant: esp32s3
+  flash_size: 16MB
+  framework:
+    type: esp-idf
+    version: recommended
+    sdkconfig_options:
+      CONFIG_ESP32S3_DEFAULT_CPU_FREQ_240: "y"
+      CONFIG_SPIRAM_FETCH_INSTRUCTIONS: "y"
+      CONFIG_SPIRAM_RODATA: "y"
+
+psram:
+  mode: octal
+  speed: 80MHz
+
+logger:
+  level: DEBUG
+
+api:
+  encryption:
+    key: !secret api_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  power_save_mode: NONE
+  ap:
+    ssid: "JC8048W550-Fallback"
+    password: !secret ap_password
+
+captive_portal:
+
+# ── Backlight ─────────────────────────────────────────────────────────────────
+# Source: JC8048W550C.h → ESP_PANEL_BACKLIGHT_IO=2, ON_LEVEL=1 (active HIGH)
+# THIS WAS THE ROOT CAUSE OF BLANK SCREEN – GPIO2 was never driven HIGH
+output:
+  - platform: gpio
+    id: backlight
+    pin: GPIO2          # Active HIGH – pulls backlight transistor on
+
+# Optional: expose brightness control to Home Assistant
+light:
+  - platform: binary
+    id: display_backlight
+    name: "Display Backlight"
+    output: backlight
+    restore_mode: ALWAYS_ON
+
+# ── I2C (GT911 touch) ─────────────────────────────────────────────────────────
+i2c:
+  sda: GPIO19
+  scl: GPIO20
+  scan: true
+  frequency: 400kHz
+
+# ── RGB Parallel Display ──────────────────────────────────────────────────────
+# Pin mapping from JC8048W550C.h (ESP_PANEL_LCD_RGB_IO_DATA0..15):
+#   DATA0 =GPIO45  DATA1 =GPIO48  DATA2 =GPIO47  DATA3 =GPIO21  DATA4 =GPIO14
+#   DATA5 =GPIO5   DATA6 =GPIO6   DATA7 =GPIO7   DATA8 =GPIO15  DATA9 =GPIO16
+#   DATA10=GPIO4   DATA11=GPIO8   DATA12=GPIO3   DATA13=GPIO46  DATA14=GPIO9
+#   DATA15=GPIO1
+#
+# RGB565 bit layout (standard): D[15:11]=R  D[10:5]=G  D[4:0]=B
+# → DATA0-4  carry Blue  (LCD D0-D4)
+# → DATA5-10 carry Green (LCD D5-D10)
+# → DATA11-15 carry Red  (LCD D11-D15)
+#
+# ESPHome rpi_dpi_rgb with color_order: BGR assembles:
+#   DATA[0:2]  = green[3:5]    DATA[3:7]  = blue[0:4]
+#   DATA[8:12] = red[0:4]      DATA[13:15]= green[0:2]
+#
+# To produce correct output we reverse-engineer the input arrays:
+#   Need DATA0 =GPIO45(B0) → set green[3]=GPIO45
+#   Need DATA1 =GPIO48(B1) → set green[4]=GPIO48
+#   Need DATA2 =GPIO14(B2) … wait, DATA2=GPIO47(B2) → green[5]=GPIO47
+#   Need DATA3 =GPIO21(B3) → set blue[0]=GPIO21
+#   Need DATA4 =GPIO14(B4) → set blue[1]=GPIO14
+#   Need DATA5 =GPIO5 (G0) → set blue[2]=GPIO5
+#   Need DATA6 =GPIO6 (G1) → set blue[3]=GPIO6
+#   Need DATA7 =GPIO7 (G2) → set blue[4]=GPIO7
+#   Need DATA8 =GPIO15(G3) → set red[0]=GPIO15
+#   Need DATA9 =GPIO16(G4) → set red[1]=GPIO16
+#   Need DATA10=GPIO4 (G5) → set red[2]=GPIO4
+#   Need DATA11=GPIO8 (R0) → set red[3]=GPIO8
+#   Need DATA12=GPIO3 (R1) → set red[4]=GPIO3
+#   Need DATA13=GPIO46(R2) → set green[0]=GPIO46
+#   Need DATA14=GPIO9 (R3) → set green[1]=GPIO9
+#   Need DATA15=GPIO1 (R4) → set green[2]=GPIO1
+#
+# EXPECTED LOG after flash (confirming correct mapping):
+#   Data pin 0: GPIO45   Data pin 5: GPIO5    Data pin 11: GPIO8
+#   Data pin 4: GPIO14   Data pin 10: GPIO4   Data pin 15: GPIO1
+display:
+  - platform: rpi_dpi_rgb
+    id: my_display
+    update_interval: never
+    auto_clear_enabled: false
+    color_order: BGR
+    pclk_frequency: 16MHz
+    pclk_inverted: true         # PCLK_ACTIVE_NEG=1 from board file
+    dimensions:
+      width: 800
+      height: 480
+    rotation: 180
+    de_pin: GPIO40
+    hsync_pin: GPIO39
+    vsync_pin: GPIO41
+    pclk_pin: GPIO42
+    # Timing from ESP_Display_Panel board file (matches Arduino example)
+    hsync_pulse_width: 4
+    hsync_back_porch:  8
+    hsync_front_porch: 8
+    vsync_pulse_width: 4
+    vsync_back_porch:  8
+    vsync_front_porch: 8
+    data_pins:
+      # ⚠️ Arrays re-ordered to compensate ESPHome's internal BGR assembly.
+      #    Do NOT rename – these are bus slot assignments, not color semantics.
+      red:
+        - GPIO15   # → DATA8  = G3
+        - GPIO16   # → DATA9  = G4
+        - GPIO4    # → DATA10 = G5
+        - GPIO8    # → DATA11 = R0
+        - GPIO3    # → DATA12 = R1
+      green:
+        - GPIO46   # → DATA13 = R2
+        - GPIO9    # → DATA14 = R3
+        - GPIO1    # → DATA15 = R4
+        - GPIO45   # → DATA0  = B0
+        - GPIO48   # → DATA1  = B1
+        - GPIO47   # → DATA2  = B2
+      blue:
+        - GPIO21   # → DATA3  = B3
+        - GPIO14   # → DATA4  = B4
+        - GPIO5    # → DATA5  = G0
+        - GPIO6    # → DATA6  = G1
+        - GPIO7    # → DATA7  = G2
+
+# ── Touch screen (GT911) ─────────────────────────────────────────────────────
+touchscreen:
+  - platform: gt911
+    id: my_touch
+    display: my_display
+    address: 0x5D
+    update_interval: 16ms
+    on_touch:
+      - lambda: |-
+          ESP_LOGI("touch", ">>> on_touch: x=%d y=%d id=%d",
+                   touch.x, touch.y, touch.id);
+    on_release:
+      - lambda: |-
+          ESP_LOGI("touch", ">>> on_release fired");
+
+# ── LVGL UI ───────────────────────────────────────────────────────────────────
+lvgl:
+  displays:
+    - my_display
+  touchscreens:
+    - my_touch
+  color_depth: 16
+  buffer_size: 100%
+  
+
+  pages:
+    - id: main_page
+      bg_color: 0xFFFFFF
+
+      widgets:
+        - label:
+            id: hello_label
+            align: CENTER
+            text: "Hello World!"
+            text_color: 0x000000
+            text_font: montserrat_28
+
+        - label:
+            id: touch_label
+            align: BOTTOM_MID
+            y: -20
+            text: "Touch the screen..."
+            text_color: 0x606060
+            text_font: montserrat_14
+
+# ── Touch binary sensor ───────────────────────────────────────────────────────
+binary_sensor:
+  - platform: touchscreen
+    touchscreen_id: my_touch
+    name: "Screen Touch"
+    id: screen_touch
+    x_min: 0
+    x_max: 799
+    y_min: 0
+    y_max: 479
+    on_press:
+      then:
+        - lambda: |-
+            ESP_LOGI("touch", ">>> binary_sensor PRESSED");
+        - lvgl.label.update:
+            id: touch_label
+            text: "Touched!"
+            text_color: 0x007700
+    on_release:
+      then:
+        - lambda: |-
+            ESP_LOGI("touch", ">>> binary_sensor RELEASED");
+        - lvgl.label.update:
+            id: touch_label
+            text: "Touch the screen..."
+            text_color: 0x606060
+
+# ── Heartbeat ─────────────────────────────────────────────────────────────────
+interval:
+  - interval: 5s
+    then:
+      - lambda: |-
+          ESP_LOGI("heartbeat", "alive | heap=%u", esp_get_free_heap_size());

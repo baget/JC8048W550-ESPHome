@@ -1,0 +1,1113 @@
+# ============================================================
+# ESPHome – JC8048W550 Bambu Lab P1S Combo Dashboard
+# Hardware: ESP32-S3-WROOM N16R8, ST7262 800×480, GT911 touch
+# Integration: greghesp/ha-bambulab (Home Assistant)
+#
+# ⚠  BEFORE FLASHING – review all placeholders listed below:
+#
+# CONFIGURATION PLACEHOLDERS
+# {
+#   "YOUR_PRINTER_PREFIX": {
+#     "description": "Your ha-bambulab printer entity prefix",
+#     "how_to_find": "HA → Settings → Devices → ha-bambulab → your printer",
+#     "example": "p1s_01p00a123456789",
+#     "replace_in": "all sensor entity_id fields (sensor.YOUR_PRINTER_PREFIX_*)"
+#   },
+#   "YOUR_TZ_OFFSET": {
+#     "description": "UTC offset in hours for your local timezone (integer)",
+#     "example": "2 for UTC+2, 3 for UTC+3, -5 for UTC-5",
+#     "replace_in": "substitutions.tz_offset_hours"
+#   }
+# }
+#
+# Dashboard layout (800×480):
+# ┌──────────────────────────────────────────────────────────┐  y=0
+# │  Bambu Lab P1S Combo          ● [STAGE]                  │  h=55
+# ├──────────────┬──────────────┬────────────────────────────┤  y=61
+# │  NOZZLE      │  BED         │  PROGRESS                  │
+# │  arc gauge   │  arc gauge   │  big % + bar + layer cnt   │  h=200
+# ├──────────────┼──────────────┼────────────────────────────┤  y=267
+# │  TIME        │  FANS        │  FILAMENT                  │
+# │  start/end/  │  part+aux    │  type + AMS slot           │  h=207
+# │  remaining   │  bars        │                            │
+# └──────────────┴──────────────┴────────────────────────────┘  y=480
+#
+# Color palette (dark Bambu theme):
+#   Background  0x18C3   Card     0x2945   Border   0x8C71
+#   Accent      0x07E0   Nozzle   0xFD20   Bed      0x07FF
+#   Time        0xFFE0   Filament 0xE21F   Fans     0xC81F
+#   White text  0xFFFFFF   Subtext  0x9CF3   Dim      0xC618
+# ============================================================
+
+substitutions:
+  # UTC offset in hours applied to timestamps from ha-bambulab.
+  # Set to your local timezone offset (e.g. "2" for UTC+2, "-5" for UTC-5).
+  tz_offset_hours: "YOUR_TZ_OFFSET"
+
+esphome:
+  name: "jc8048w550"
+  friendly_name: "JC8048W550 Display"
+  on_boot:
+    priority: -100    # After display + LVGL init
+    then:
+      - lambda: |-
+          ESP_LOGI("boot", ">>> on_boot: turning on backlight + showing page");
+      - output.turn_on: backlight
+      - lvgl.page.show: printer_page
+
+esp32:
+  board: esp32-s3-devkitc-1
+  variant: esp32s3
+  flash_size: 16MB
+  framework:
+    type: esp-idf
+    version: recommended
+    sdkconfig_options:
+      CONFIG_ESP32S3_DEFAULT_CPU_FREQ_240: "y"
+      CONFIG_SPIRAM_FETCH_INSTRUCTIONS: "y"
+      CONFIG_SPIRAM_RODATA: "y"
+
+psram:
+  mode: octal
+  speed: 80MHz
+
+logger:
+  level: DEBUG
+
+api:
+  encryption:
+    key: !secret api_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  power_save_mode: NONE
+  ap:
+    ssid: "JC8048W550-Fallback"
+    password: !secret ap_password
+
+captive_portal:
+
+# ── Fonts ─────────────────────────────────────────────────────────────────────
+# ESPHome's built-in `montserrat_*` glyphs render at bpp=4 (anti-aliased
+# grayscale). When LVGL rotates the framebuffer 180° and pushes it to a
+# 16-bit RGB parallel panel, the AA edge pixels become coloured half-tones —
+# this is the "blurry / fringed text" visible on the dashboard. Defining
+# our own fonts at **bpp: 1** gives hard pixel edges and crisp rendering.
+font:
+  - file: "gfonts://Montserrat"
+    id: font_10
+    size: 10
+    bpp: 1
+    glyphs: "0123456789 :°CFHLMSPRGETYINOABDUXZ/%-.hmw()"
+  - file: "gfonts://Montserrat"
+    id: font_12
+    size: 12
+    bpp: 1
+    glyphs: "0123456789 :°CFHLMSPRGETYINOABDUXZ/%-.hm"
+  - file: "gfonts://Montserrat"
+    id: font_14
+    size: 14
+    bpp: 1
+    glyphs: "0123456789 %°C-."
+  - file:
+      type: gfonts
+      family: Montserrat
+      weight: 700
+    id: font_22
+    size: 22
+    bpp: 1
+    # Kept broad so stage text, AMS slot, and ISO time chars all render.
+    glyphs: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 :/-.+"
+  - file:
+      type: gfonts
+      family: Montserrat
+      weight: 700
+    id: font_20
+    size: 20
+    bpp: 1
+    glyphs: "0123456789 °C-."
+  - file:
+      type: gfonts
+      family: Montserrat
+      weight: 700
+    id: font_28
+    size: 28
+    bpp: 1
+    glyphs: "0123456789.-"
+  - file:
+      type: gfonts
+      family: Montserrat
+      weight: 700
+    id: font_36
+    size: 36
+    bpp: 1
+    glyphs: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -/"
+  - file:
+      type: gfonts
+      family: Montserrat
+      weight: 700
+    id: font_48
+    size: 48
+    bpp: 1
+    glyphs: "0123456789%"
+
+# ── Backlight ─────────────────────────────────────────────────────────────────
+# Source: JC8048W550C.h → ESP_PANEL_BACKLIGHT_IO=2, ON_LEVEL=1 (active HIGH)
+# THIS WAS THE ROOT CAUSE OF BLANK SCREEN – GPIO2 was never driven HIGH
+output:
+  - platform: gpio
+    id: backlight
+    pin: GPIO2          # Active HIGH – pulls backlight transistor on
+
+# Optional: expose brightness control to Home Assistant
+light:
+  - platform: binary
+    id: display_backlight
+    name: "Display Backlight"
+    output: backlight
+    restore_mode: ALWAYS_ON
+
+# ── I2C (GT911 touch) ─────────────────────────────────────────────────────────
+i2c:
+  sda: GPIO19
+  scl: GPIO20
+  scan: true
+  frequency: 400kHz
+
+# ── RGB Parallel Display ──────────────────────────────────────────────────────
+# Pin mapping from JC8048W550C.h (ESP_PANEL_LCD_RGB_IO_DATA0..15):
+#   DATA0 =GPIO45  DATA1 =GPIO48  DATA2 =GPIO47  DATA3 =GPIO21  DATA4 =GPIO14
+#   DATA5 =GPIO5   DATA6 =GPIO6   DATA7 =GPIO7   DATA8 =GPIO15  DATA9 =GPIO16
+#   DATA10=GPIO4   DATA11=GPIO8   DATA12=GPIO3   DATA13=GPIO46  DATA14=GPIO9
+#   DATA15=GPIO1
+#
+# RGB565 bit layout (standard): D[15:11]=R  D[10:5]=G  D[4:0]=B
+# → DATA0-4  carry Blue  (LCD D0-D4)
+# → DATA5-10 carry Green (LCD D5-D10)
+# → DATA11-15 carry Red  (LCD D11-D15)
+#
+# ESPHome rpi_dpi_rgb with color_order: BGR assembles:
+#   DATA[0:2]  = green[3:5]    DATA[3:7]  = blue[0:4]
+#   DATA[8:12] = red[0:4]      DATA[13:15]= green[0:2]
+#
+# To produce correct output we reverse-engineer the input arrays:
+#   Need DATA0 =GPIO45(B0) → set green[3]=GPIO45
+#   Need DATA1 =GPIO48(B1) → set green[4]=GPIO48
+#   Need DATA2 =GPIO14(B2) … wait, DATA2=GPIO47(B2) → green[5]=GPIO47
+#   Need DATA3 =GPIO21(B3) → set blue[0]=GPIO21
+#   Need DATA4 =GPIO14(B4) → set blue[1]=GPIO14
+#   Need DATA5 =GPIO5 (G0) → set blue[2]=GPIO5
+#   Need DATA6 =GPIO6 (G1) → set blue[3]=GPIO6
+#   Need DATA7 =GPIO7 (G2) → set blue[4]=GPIO7
+#   Need DATA8 =GPIO15(G3) → set red[0]=GPIO15
+#   Need DATA9 =GPIO16(G4) → set red[1]=GPIO16
+#   Need DATA10=GPIO4 (G5) → set red[2]=GPIO4
+#   Need DATA11=GPIO8 (R0) → set red[3]=GPIO8
+#   Need DATA12=GPIO3 (R1) → set red[4]=GPIO3
+#   Need DATA13=GPIO46(R2) → set green[0]=GPIO46
+#   Need DATA14=GPIO9 (R3) → set green[1]=GPIO9
+#   Need DATA15=GPIO1 (R4) → set green[2]=GPIO1
+#
+# EXPECTED LOG after flash (confirming correct mapping):
+#   Data pin 0: GPIO45   Data pin 5: GPIO5    Data pin 11: GPIO8
+#   Data pin 4: GPIO14   Data pin 10: GPIO4   Data pin 15: GPIO1
+display:
+  - platform: rpi_dpi_rgb
+    id: my_display
+    update_interval: never
+    auto_clear_enabled: false
+    color_order: BGR
+    pclk_frequency: 16MHz
+    pclk_inverted: true         # PCLK_ACTIVE_NEG=1 from board file
+    dimensions:
+      width: 800
+      height: 480
+    de_pin: GPIO40
+    hsync_pin: GPIO39
+    vsync_pin: GPIO41
+    pclk_pin: GPIO42
+    # Timing from ESP_Display_Panel board file (matches Arduino example)
+    hsync_pulse_width: 4
+    hsync_back_porch:  8
+    hsync_front_porch: 8
+    vsync_pulse_width: 4
+    vsync_back_porch:  8
+    vsync_front_porch: 8
+    data_pins:
+      # ⚠️ Arrays re-ordered to compensate ESPHome's internal BGR assembly.
+      #    Do NOT rename – these are bus slot assignments, not color semantics.
+      red:
+        - GPIO15   # → DATA8  = G3
+        - GPIO16   # → DATA9  = G4
+        - GPIO4    # → DATA10 = G5
+        - GPIO8    # → DATA11 = R0
+        - GPIO3    # → DATA12 = R1
+      green:
+        - GPIO46   # → DATA13 = R2
+        - GPIO9    # → DATA14 = R3
+        - GPIO1    # → DATA15 = R4
+        - GPIO45   # → DATA0  = B0
+        - GPIO48   # → DATA1  = B1
+        - GPIO47   # → DATA2  = B2
+      blue:
+        - GPIO21   # → DATA3  = B3
+        - GPIO14   # → DATA4  = B4
+        - GPIO5    # → DATA5  = G0
+        - GPIO6    # → DATA6  = G1
+        - GPIO7    # → DATA7  = G2
+
+# ── Touch screen (GT911) ─────────────────────────────────────────────────────
+touchscreen:
+  - platform: gt911
+    id: my_touch
+    display: my_display
+    address: 0x5D
+    update_interval: 16ms
+    # on_touch:
+    #   - lambda: |-
+    #       ESP_LOGI("touch", ">>> on_touch: x=%d y=%d id=%d",
+    #                touch.x, touch.y, touch.id);
+    # on_release:
+    #   - lambda: |-
+    #       ESP_LOGI("touch", ">>> on_release fired");
+
+# ── Home Assistant Sensors via ha-bambulab ────────────────────────────────────
+# ⚠  Entity ID reference table – find your prefix in HA and replace:
+# ┌────────────────────────────────────────────────┬───────────────────────────┐
+# │  ha-bambulab Entity (prefix = YOUR_PRINTER_PREFIX)       │  Typical Value / Unit     │
+# ├────────────────────────────────────────────────┼───────────────────────────┤
+# │  sensor.YOUR_PRINTER_PREFIX_current_stage                │  "printing" / "idle" …    │
+# │  sensor.YOUR_PRINTER_PREFIX_nozzle_temperature           │  float °C                 │
+# │  sensor.YOUR_PRINTER_PREFIX_nozzle_target_temperature    │  float °C                 │
+# │  sensor.YOUR_PRINTER_PREFIX_bed_temperature              │  float °C                 │
+# │  sensor.YOUR_PRINTER_PREFIX_bed_target_temperature       │  float °C                 │
+# │  sensor.YOUR_PRINTER_PREFIX_print_progress               │  0–100 %                  │
+# │  sensor.YOUR_PRINTER_PREFIX_remaining_time               │  minutes (integer)        │
+# │  sensor.YOUR_PRINTER_PREFIX_start_time                   │  formatted string         │
+# │  sensor.YOUR_PRINTER_PREFIX_finish_time                  │  formatted string         │
+# │  sensor.YOUR_PRINTER_PREFIX_cooling_fan_speed            │  0–100 %                  │
+# │  sensor.YOUR_PRINTER_PREFIX_aux_fan_speed                │  0–100 %                  │
+# │  sensor.YOUR_PRINTER_PREFIX_current_layer_num            │  integer                  │
+# │  sensor.YOUR_PRINTER_PREFIX_total_layer_num              │  integer                  │
+# │  sensor.YOUR_PRINTER_PREFIX_active_tray_type             │  "PLA" / "PETG" …         │
+# │  sensor.YOUR_PRINTER_PREFIX_active_tray_name             │  "AMS1/1" …               │
+# └────────────────────────────────────────────────┴───────────────────────────┘
+
+sensor:
+
+  # ── Nozzle ─────────────────────────────────────────────────────────────────
+  - platform: homeassistant
+    id: nozzle_temp
+    entity_id: sensor.YOUR_PRINTER_PREFIX_nozzle_temperature
+    on_value:
+      - lambda: 'ESP_LOGI("ha", "nozzle_temp=%.1f", x);'
+      - lvgl.label.update:
+          id: lbl_nozzle_temp
+          text: !lambda |-
+            char b[12]; snprintf(b, 12, "%.0f", x); return b;
+
+  - platform: homeassistant
+    id: nozzle_target
+    entity_id: sensor.YOUR_PRINTER_PREFIX_nozzle_target_temperature
+    on_value:
+      - lvgl.label.update:
+          id: lbl_nozzle_target
+          text: !lambda |-
+            char b[12]; snprintf(b, 12, "%.0f°C", x); return b;
+
+  # ── Bed ────────────────────────────────────────────────────────────────────
+  - platform: homeassistant
+    id: bed_temp
+    entity_id: sensor.YOUR_PRINTER_PREFIX_bed_temperature
+    on_value:
+      - lvgl.label.update:
+          id: lbl_bed_temp
+          text: !lambda |-
+            char b[12]; snprintf(b, 12, "%.0f", x); return b;
+
+  - platform: homeassistant
+    id: bed_target
+    entity_id: sensor.YOUR_PRINTER_PREFIX_bed_target_temperature
+    on_value:
+      - lvgl.label.update:
+          id: lbl_bed_target
+          text: !lambda |-
+            char b[12]; snprintf(b, 12, "%.0f°C", x); return b;
+
+  # ── Progress ───────────────────────────────────────────────────────────────
+  - platform: homeassistant
+    id: print_progress
+    entity_id: sensor.YOUR_PRINTER_PREFIX_print_progress
+    on_value:
+      - lambda: 'ESP_LOGI("ha", "progress=%.1f", x);'
+      - lvgl.label.update:
+          id: lbl_progress_pct
+          text: !lambda |-
+            char b[8]; snprintf(b, 8, "%.0f%%", x); return b;
+      - lvgl.bar.update:
+          id: bar_progress
+          value: !lambda return (int)x;
+
+  # (remaining_time handled as text_sensor below — newer ha-bambulab exposes
+  #  it as a pre-formatted "HH:MM" string rather than an integer sensor.)
+
+  # ── Fans ───────────────────────────────────────────────────────────────────
+  - platform: homeassistant
+    id: cooling_fan
+    entity_id: sensor.YOUR_PRINTER_PREFIX_cooling_fan_speed
+    on_value:
+      - lvgl.label.update:
+          id: lbl_cooling_fan
+          text: !lambda |-
+            char b[8]; snprintf(b, 8, "%.0f%%", x); return b;
+      - lvgl.bar.update:
+          id: bar_cooling_fan
+          value: !lambda return (int)x;
+
+  - platform: homeassistant
+    id: aux_fan
+    entity_id: sensor.YOUR_PRINTER_PREFIX_aux_fan_speed
+    on_value:
+      - lvgl.label.update:
+          id: lbl_aux_fan
+          text: !lambda |-
+            char b[8]; snprintf(b, 8, "%.0f%%", x); return b;
+      - lvgl.bar.update:
+          id: bar_aux_fan
+          value: !lambda return (int)x;
+
+  # ── Layers ─────────────────────────────────────────────────────────────────
+  - platform: homeassistant
+    id: current_layer
+    entity_id: sensor.YOUR_PRINTER_PREFIX_current_layer
+    on_value:
+      - lvgl.label.update:
+          id: lbl_layers
+          text: !lambda |-
+            char b[20];
+            snprintf(b, 20, "%d / %d", (int)x, (int)id(total_layer).state);
+            return b;
+
+  - platform: homeassistant
+    id: total_layer
+    entity_id: sensor.YOUR_PRINTER_PREFIX_total_layer_count
+    on_value:
+      - lvgl.label.update:
+          id: lbl_layers
+          text: !lambda |-
+            char b[20];
+            snprintf(b, 20, "%d / %d", (int)id(current_layer).state, (int)x);
+            return b;
+
+text_sensor:
+
+  # ── Stage (printing / idle / pause / failed / …) ──────────────────────────
+  - platform: homeassistant
+    id: printer_stage
+    entity_id: sensor.YOUR_PRINTER_PREFIX_current_stage
+    on_value:
+      - lambda: 'ESP_LOGI("ha", "stage=%s", x.c_str());'
+      - lvgl.label.update:
+          id: lbl_stage
+          text: !lambda return x.c_str();
+      # Change status dot + stage text color based on state
+      - lambda: |-
+          lv_color_t c;
+          if      (x == "printing") c = lv_color_hex(0x07E0);  //(lv_color_t){.full = 0x07E0};
+          else if (x == "pause")    c = lv_color_hex(0xFFE0);  //(lv_color_t){.full = 0xFFE0};
+          else if (x == "failed")   c = lv_color_hex(0xF800);  //(lv_color_t){.full = 0xF800};
+          else                       c = lv_color_hex(0xC618); //(lv_color_t){.full = 0xC618};
+          lv_obj_set_style_bg_color(id(status_dot), c, 0);
+          lv_obj_set_style_text_color(id(lbl_stage), c, 0);
+
+  # ── Start / end times ─────────────────────────────────────────────────────
+  # ha-bambulab emits ISO-8601 UTC strings ("2026-04-17T09:51:00+00:00").
+  # Parse, convert to local time (via ${tz_offset_hours}), show "HH:MM".
+  # The lambda also handles sources with non-zero embedded offsets.
+  - platform: homeassistant
+    id: start_time_str
+    entity_id: sensor.YOUR_PRINTER_PREFIX_start_time
+    on_value:
+      - lvgl.label.update:
+          id: lbl_start_time
+          text: !lambda |-
+            std::string s = x;
+            if (s.empty() || s == "unknown" || s == "unavailable" || s == "None")
+              return std::string("--:--");
+            int Y, Mo, D, h, m, sec;
+            if (sscanf(s.c_str(), "%d-%d-%dT%d:%d:%d",
+                       &Y, &Mo, &D, &h, &m, &sec) < 5)
+              return std::string("--:--");
+            // Extract embedded "+HH:MM" / "-HH:MM" / "Z" offset
+            int src_off_min = 0;
+            size_t tzp = s.find_first_of("+-Z", 19);
+            if (tzp != std::string::npos && s[tzp] != 'Z') {
+              int th = 0, tm = 0;
+              sscanf(s.c_str() + tzp + 1, "%d:%d", &th, &tm);
+              src_off_min = (th * 60 + tm) * (s[tzp] == '-' ? -1 : 1);
+            }
+            int total = h * 60 + m - src_off_min + ${tz_offset_hours} * 60;
+            total = ((total % 1440) + 1440) % 1440;
+            char b[8];
+            snprintf(b, sizeof(b), "%02d:%02d", total / 60, total % 60);
+            return std::string(b);
+
+  - platform: homeassistant
+    id: end_time_str
+    # ha-bambulab exposes the predicted completion as `_end_time`
+    # (older versions used `_finish_time` — swap if your integration differs).
+    entity_id: sensor.YOUR_PRINTER_PREFIX_end_time
+    on_value:
+      - lvgl.label.update:
+          id: lbl_end_time
+          text: !lambda |-
+            std::string s = x;
+            if (s.empty() || s == "unknown" || s == "unavailable" || s == "None")
+              return std::string("--:--");
+            int Y, Mo, D, h, m, sec;
+            if (sscanf(s.c_str(), "%d-%d-%dT%d:%d:%d",
+                       &Y, &Mo, &D, &h, &m, &sec) < 5)
+              return std::string("--:--");
+            int src_off_min = 0;
+            size_t tzp = s.find_first_of("+-Z", 19);
+            if (tzp != std::string::npos && s[tzp] != 'Z') {
+              int th = 0, tm = 0;
+              sscanf(s.c_str() + tzp + 1, "%d:%d", &th, &tm);
+              src_off_min = (th * 60 + tm) * (s[tzp] == '-' ? -1 : 1);
+            }
+            int total = h * 60 + m - src_off_min + ${tz_offset_hours} * 60;
+            total = ((total % 1440) + 1440) % 1440;
+            char b[8];
+            snprintf(b, sizeof(b), "%02d:%02d", total / 60, total % 60);
+            return std::string(b);
+
+  # Remaining time. Observed ha-bambulab states across versions:
+  #   "0.633333"  → fractional HOURS  (current greghesp/ha-bambulab)
+  #   "01:23"     → "HH:MM" string    (some forks)
+  #   "83"        → integer MINUTES   (older versions)
+  # Heuristic: colon → HH:MM; decimal point → hours; else minutes.
+  - platform: homeassistant
+    id: remaining_time_str
+    entity_id: sensor.YOUR_PRINTER_PREFIX_remaining_time
+    on_value:
+      - lvgl.label.update:
+          id: lbl_remaining
+          text: !lambda |-
+            std::string s = x;
+            if (s.empty() || s == "unknown" || s == "unavailable" || s == "None")
+              return std::string("--h --m");
+            int h = 0, m = 0;
+            if (sscanf(s.c_str(), "%d:%d", &h, &m) == 2) {
+              // "HH:MM" already
+            } else if (s.find('.') != std::string::npos) {
+              double hours = atof(s.c_str());
+              if (hours < 0) return std::string("--h --m");
+              int total_min = (int)(hours * 60.0 + 0.5);
+              h = total_min / 60;
+              m = total_min % 60;
+            } else {
+              int total = atoi(s.c_str());
+              if (total <= 0) return std::string("--h --m");
+              if (total > 6000) total = total / 60;  // seconds → minutes
+              h = total / 60;
+              m = total % 60;
+            }
+            char b[16];
+            snprintf(b, sizeof(b), "%dh %02dm", h, m);
+            return std::string(b);
+
+  # ── Filament ───────────────────────────────────────────────────────────────
+  # ha-bambulab exposes a single `_active_tray` sensor whose STATE is the
+  # tray name (e.g. "Generic PETG") and whose ATTRIBUTES carry `type`
+  # ("PETG"), `tray_index` (1-4, 0 = external spool), `color`, etc.
+  # We pull `type` via attribute: and derive the AMS slot label from
+  # `tray_index`.
+  - platform: homeassistant
+    id: active_tray_type
+    entity_id: sensor.YOUR_PRINTER_PREFIX_active_tray
+    attribute: type
+    on_value:
+      - lvgl.label.update:
+          id: lbl_filament_type
+          text: !lambda |-
+            if (x.empty() || x == "unknown" || x == "unavailable" || x == "None")
+              return std::string("---");
+            return x;
+
+  - platform: homeassistant
+    id: active_tray_index
+    entity_id: sensor.YOUR_PRINTER_PREFIX_active_tray
+    attribute: tray_index
+    on_value:
+      - lvgl.label.update:
+          id: lbl_filament_slot
+          text: !lambda |-
+            int i = atoi(x.c_str());
+            if (i <= 0) return std::string("EXTERNAL");
+            char b[12]; snprintf(b, 12, "AMS1/%d", i);
+            return std::string(b);
+
+# ── LVGL Dashboard ────────────────────────────────────────────────────────────
+lvgl:
+  rotation: 180
+  displays:
+    - my_display
+  touchscreens:
+    - my_touch
+  color_depth: 16
+  buffer_size: 100%
+
+  pages:
+    - id: printer_page
+      bg_color: 0x0000
+      bg_opa: COVER
+
+      widgets:
+
+        # ════════════════════════════════════════════════════════════════
+        # HEADER BAR  (full width, 55 px)
+        # ════════════════════════════════════════════════════════════════
+        - obj:
+            x: 0
+            y: 0
+            width: 800
+            height: 55
+            bg_color: 0x0000
+            bg_opa: COVER
+            border_width: 0
+            radius: 0
+            pad_all: 0
+            widgets:
+
+              # Bambu-green top accent line
+              - obj:
+                  x: 0
+                  y: 0
+                  width: 800
+                  height: 3
+                  bg_color: 0x07E0
+                  bg_opa: COVER
+                  border_width: 0
+                  radius: 0
+
+              # Printer name
+              - label:
+                  x: 16
+                  y: 17
+                  text: "Bambu Lab P1S Combo"
+                  text_font: font_22
+                  text_color: 0xFFFFFF
+
+              # Status dot (color set dynamically by lambda above)
+              - obj:
+                  id: status_dot
+                  x: 306
+                  y: 22
+                  width: 12
+                  height: 12
+                  bg_color: 0xC618
+                  bg_opa: COVER
+                  border_width: 0
+                  radius: 6    # circle
+
+              # Stage label (color set dynamically)
+              - label:
+                  id: lbl_stage
+                  x: 326
+                  y: 17
+                  text: "---"
+                  text_font: font_22
+                  text_color: 0xC618
+
+              # WiFi indicator (obj circle — avoids needing ● unicode glyph)
+              - obj:
+                  x: 772
+                  y: 24
+                  width: 10
+                  height: 10
+                  bg_color: 0x07E0
+                  bg_opa: COVER
+                  border_width: 0
+                  radius: 5
+
+        # ════════════════════════════════════════════════════════════════
+        # CARD 1 – Nozzle Temperature
+        # Position: col1  x=6   y=61   w=258  h=200
+        # Shows current (big) and set temperature, no dial
+        # ════════════════════════════════════════════════════════════════
+        - obj:
+            x: 6
+            y: 61
+            width: 258
+            height: 200
+            bg_color: 0x0000
+            bg_opa: COVER
+            border_color: 0xFFFF
+            border_width: 2
+            radius: 10
+            pad_all: 0
+            widgets:
+
+              - label:
+                  x: 12
+                  y: 10
+                  text: "NOZZLE"
+                  text_font: font_12
+                  text_color: 0xFD20
+
+              # Current temperature (big number)
+              - label:
+                  id: lbl_nozzle_temp
+                  x: 24
+                  y: 38
+                  text: "--"
+                  text_font: font_48
+                  text_color: 0xFFFFFF
+
+              - label:
+                  x: 162
+                  y: 48
+                  text: "°C"
+                  text_font: font_14
+                  text_color: 0xFD20
+
+              - obj:
+                  x: 12
+                  y: 102
+                  width: 234
+                  height: 1
+                  bg_color: 0x8C71
+                  bg_opa: COVER
+                  border_width: 0
+                  radius: 0
+
+              # Set temperature
+              - label:
+                  x: 12
+                  y: 112
+                  text: "SET"
+                  text_font: font_10
+                  text_color: 0xC618
+
+              - label:
+                  id: lbl_nozzle_target
+                  x: 12
+                  y: 128
+                  text: "--°C"
+                  text_font: font_20
+                  text_color: 0xFD20
+
+        # ════════════════════════════════════════════════════════════════
+        # CARD 2 – Bed Temperature
+        # Position: col2  x=270  y=61   w=258  h=200
+        # Shows current (big) and set temperature, no dial
+        # ════════════════════════════════════════════════════════════════
+        - obj:
+            x: 270
+            y: 61
+            width: 258
+            height: 200
+            bg_color: 0x0000
+            bg_opa: COVER
+            border_color: 0xFFFF
+            border_width: 2
+            radius: 10
+            pad_all: 0
+            widgets:
+
+              - label:
+                  x: 12
+                  y: 10
+                  text: "BED"
+                  text_font: font_12
+                  text_color: 0x07FF
+
+              # Current temperature (big number)
+              - label:
+                  id: lbl_bed_temp
+                  x: 24
+                  y: 38
+                  text: "--"
+                  text_font: font_48
+                  text_color: 0xFFFFFF
+
+              - label:
+                  x: 162
+                  y: 48
+                  text: "°C"
+                  text_font: font_14
+                  text_color: 0x07FF
+
+              - obj:
+                  x: 12
+                  y: 102
+                  width: 234
+                  height: 1
+                  bg_color: 0x8C71
+                  bg_opa: COVER
+                  border_width: 0
+                  radius: 0
+
+              # Set temperature
+              - label:
+                  x: 12
+                  y: 112
+                  text: "SET"
+                  text_font: font_10
+                  text_color: 0xC618
+
+              - label:
+                  id: lbl_bed_target
+                  x: 12
+                  y: 128
+                  text: "--°C"
+                  text_font: font_20
+                  text_color: 0x07FF
+
+        # ════════════════════════════════════════════════════════════════
+        # CARD 3 – Print Progress
+        # Position: col3  x=534  y=61   w=260  h=200
+        # Shows big %, progress bar, layer counter
+        # ════════════════════════════════════════════════════════════════
+        - obj:
+            x: 534
+            y: 61
+            width: 260
+            height: 200
+            bg_color: 0x0000
+            bg_opa: COVER
+            border_color: 0xFFFF
+            border_width: 2
+            radius: 10
+            pad_all: 0
+            widgets:
+
+              - label:
+                  x: 12
+                  y: 10
+                  text: "PROGRESS"
+                  text_font: font_12
+                  text_color: 0x07E0
+
+              # Big percentage number
+              - label:
+                  id: lbl_progress_pct
+                  x: 36
+                  y: 32
+                  text: "0%"
+                  text_font: font_48
+                  text_color: 0x07E0
+
+              # Progress bar
+              - bar:
+                  id: bar_progress
+                  x: 12
+                  y: 140
+                  width: 236
+                  height: 16
+                  min_value: 0
+                  max_value: 100
+                  value: 0
+                  bg_color: 0x8C71
+                  bg_opa: COVER
+                  radius: 8
+                  indicator:
+                    bg_color: 0x07E0
+                    bg_opa: COVER
+                    radius: 8
+
+              # Layer counter
+              - label:
+                  x: 12
+                  y: 165
+                  text: "LAYER"
+                  text_font: font_12
+                  text_color: 0xC618
+
+              - label:
+                  id: lbl_layers
+                  x: 72
+                  y: 165
+                  text: "-- / --"
+                  text_font: font_12
+                  text_color: 0xFFFF
+
+        # ════════════════════════════════════════════════════════════════
+        # CARD 4 – Time
+        # Position: col1  x=6   y=267  w=258  h=207
+        # Shows start, end, remaining
+        # ════════════════════════════════════════════════════════════════
+        - obj:
+            x: 6
+            y: 267
+            width: 258
+            height: 207
+            bg_color: 0x0000
+            bg_opa: COVER
+            border_color: 0xFFFF
+            border_width: 2
+            radius: 10
+            pad_all: 0
+            widgets:
+
+              - label:
+                  x: 12
+                  y: 10
+                  text: "TIME"
+                  text_font: font_12
+                  text_color: 0xFFE0
+
+              # ── Start ──
+              - label:
+                  x: 12
+                  y: 36
+                  text: "START"
+                  text_font: font_10
+                  text_color: 0xC618
+
+              - label:
+                  id: lbl_start_time
+                  x: 12
+                  y: 50
+                  text: "--:--"
+                  text_font: font_22
+                  text_color: 0xFFFFFF
+
+              - obj:   # divider
+                  x: 12
+                  y: 83
+                  width: 234
+                  height: 1
+                  bg_color: 0x8C71
+                  bg_opa: COVER
+                  border_width: 0
+                  radius: 0
+
+              # ── End ──
+              - label:
+                  x: 12
+                  y: 90
+                  text: "END (EST)"
+                  text_font: font_10
+                  text_color: 0xC618
+
+              - label:
+                  id: lbl_end_time
+                  x: 12
+                  y: 104
+                  text: "--:--"
+                  text_font: font_22
+                  text_color: 0xFFFFFF
+
+              - obj:   # divider
+                  x: 12
+                  y: 137
+                  width: 234
+                  height: 1
+                  bg_color: 0x8C71
+                  bg_opa: COVER
+                  border_width: 0
+                  radius: 0
+
+              # ── Remaining ──
+              - label:
+                  x: 12
+                  y: 144
+                  text: "REMAINING"
+                  text_font: font_10
+                  text_color: 0xC618
+
+              - label:
+                  id: lbl_remaining
+                  x: 12
+                  y: 160
+                  text: "--h --m"
+                  text_font: font_22
+                  text_color: 0xFFE0
+
+        # ════════════════════════════════════════════════════════════════
+        # CARD 5 – Fans
+        # Position: col2  x=270  y=267  w=258  h=207
+        # Shows part-cooling and aux/chamber fans with bar meters
+        # ════════════════════════════════════════════════════════════════
+        - obj:
+            x: 270
+            y: 267
+            width: 258
+            height: 207
+            bg_color: 0x0000
+            bg_opa: COVER
+            border_color: 0xFFFF
+            border_width: 2
+            radius: 10
+            pad_all: 0
+            widgets:
+
+              - label:
+                  x: 12
+                  y: 10
+                  text: "FANS"
+                  text_font: font_12
+                  text_color: 0xC81F
+
+              # ── Part Cooling ──
+              - label:
+                  x: 12
+                  y: 36
+                  text: "PART COOLING"
+                  text_font: font_10
+                  text_color: 0xC618
+
+              - label:
+                  id: lbl_cooling_fan
+                  x: 186
+                  y: 34
+                  text: "--%"
+                  text_font: font_14
+                  text_color: 0xFFFFFF
+
+              - bar:
+                  id: bar_cooling_fan
+                  x: 12
+                  y: 55
+                  width: 234
+                  height: 10
+                  min_value: 0
+                  max_value: 100
+                  value: 0
+                  bg_color: 0x8C71
+                  bg_opa: COVER
+                  radius: 5
+                  indicator:
+                    bg_color: 0xC81F
+                    bg_opa: COVER
+                    radius: 5
+
+              - obj:   # divider
+                  x: 12
+                  y: 80
+                  width: 234
+                  height: 1
+                  bg_color: 0x8C71
+                  bg_opa: COVER
+                  border_width: 0
+                  radius: 0
+
+              # ── Aux / Chamber ──
+              - label:
+                  x: 12
+                  y: 88
+                  text: "AUX / CHAMBER"
+                  text_font: font_10
+                  text_color: 0xC618
+
+              - label:
+                  id: lbl_aux_fan
+                  x: 186
+                  y: 86
+                  text: "--%"
+                  text_font: font_14
+                  text_color: 0xFFFFFF
+
+              - bar:
+                  id: bar_aux_fan
+                  x: 12
+                  y: 107
+                  width: 234
+                  height: 10
+                  min_value: 0
+                  max_value: 100
+                  value: 0
+                  bg_color: 0x8C71
+                  bg_opa: COVER
+                  radius: 5
+                  indicator:
+                    bg_color: 0xC81F
+                    bg_opa: COVER
+                    radius: 5
+
+        # ════════════════════════════════════════════════════════════════
+        # CARD 6 – Filament
+        # Position: col3  x=534  y=267  w=260  h=207
+        # Shows active filament type and AMS slot from ha-bambulab
+        # ════════════════════════════════════════════════════════════════
+        - obj:
+            x: 534
+            y: 267
+            width: 260
+            height: 207
+            bg_color: 0x0000
+            bg_opa: COVER
+            border_color: 0xFFFF
+            border_width: 2
+            radius: 10
+            pad_all: 0
+            widgets:
+
+              - label:
+                  x: 12
+                  y: 10
+                  text: "FILAMENT"
+                  text_font: font_12
+                  text_color: 0xE21F
+
+              # Filament type (PLA / PETG / ABS / TPU …)
+              - label:
+                  x: 12
+                  y: 38
+                  text: "TYPE"
+                  text_font: font_10
+                  text_color: 0xC618
+
+              - label:
+                  id: lbl_filament_type
+                  x: 12
+                  y: 54
+                  text: "---"
+                  text_font: font_36
+                  text_color: 0xFFFFFF
+
+              - obj:   # divider
+                  x: 12
+                  y: 104
+                  width: 236
+                  height: 1
+                  bg_color: 0x8C71
+                  bg_opa: COVER
+                  border_width: 0
+                  radius: 0
+
+              # AMS slot name
+              - label:
+                  x: 12
+                  y: 112
+                  text: "AMS SLOT"
+                  text_font: font_10
+                  text_color: 0xC618
+
+              - label:
+                  id: lbl_filament_slot
+                  x: 12
+                  y: 128
+                  text: "---"
+                  text_font: font_22
+                  text_color: 0xE21F
+
+# ── Heartbeat ─────────────────────────────────────────────────────────────────
+interval:
+  - interval: 30s
+    then:
+      - lambda: |-
+          ESP_LOGI("heartbeat", "alive | heap=%u psram=%u",
+                   esp_get_free_heap_size(),
+                   heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+          ESP_LOGI("state", "nozzle=%.1f bed=%.1f progress=%.1f stage='%s'",
+                   id(nozzle_temp).state,
+                   id(bed_temp).state,
+                   id(print_progress).state,
+                   id(printer_stage).state.c_str());
