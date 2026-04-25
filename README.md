@@ -38,7 +38,7 @@ Use this first to confirm the display, backlight, and touch are all functional b
 
 A full printer-monitoring dashboard for the **Bambu Lab P1S Combo**, pulling live telemetry from Home Assistant via the [greghesp/ha-bambulab](https://github.com/greghesp/ha-bambulab) integration.
 
-![Bambu Lab P1S Dashboard](assets/jc8048w550-bambu.jpg)
+![Bambu Lab P1S Dashboard](/asserts/jc8048w550-bambu.jpg)
 
 **Dashboard layout (800×480):**
 
